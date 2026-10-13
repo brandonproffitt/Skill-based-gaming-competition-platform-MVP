@@ -1,7 +1,27 @@
 # MVP Plan — Skill-Based Speedrun Wagering (Testnet)
 
-Status: **proposal, awaiting answers to the open questions in §1.** No code until they're answered.
+Status: **M0 and M1 done.** Decisions below are final for testnet unless revisited.
 Network: **Base Sepolia only.** No real money until explicitly approved.
+
+## Decisions (answers to §1)
+
+All defaults in §1 are accepted, with these changes:
+
+- **Challenge code (Q7):** the code must be visible at **both the start and the end** of the run (on screen, or
+  on a phone or paper in frame). A code shown only at the start could be spliced onto an old run.
+- **Anti-collusion:** a wallet can't accept its own challenge. This is enforced on-chain (`accept` reverts) and
+  in the DB (`challenges_no_self_match` check). Repeat matchups between the same two wallets are flagged for
+  review (`collusion_flags` table; detection logic lands in M4).
+- **Disputes (Q14):** you are the reviewer and final judge on testnet. Disputes are structured so a second
+  reviewer can be added later without schema changes: each review is its own `dispute_reviews` row, and
+  `disputes.required_reviews` sets how many are needed. **Before real money, add a second reviewer.** Players
+  will question rulings made by the same party that collects the fee.
+- **Games (Q19):** the curated list starts with **non-Nintendo titles**. Each game records the publisher's
+  policy on wagered competitions (`publisher_policy_status`, URL, notes). Nintendo's community tournament
+  guidelines are among the strictest and unfriendly to anything tied to wagering.
+- **Stack (Q21):** TypeScript throughout. **Neon** for Postgres (simpler than Supabase, since wallet login and R2
+  already cover auth and storage). Vercel, Cloudflare, and Neon accounts are needed by M3–M5.
+- **Legal:** have a lawyer review the plan before mainnet, and expect to block some states (§7).
 
 ---
 
@@ -105,6 +125,8 @@ type Verdict = {
 
 ## 3. Data model
 
+> As built in M0: `apps/web/src/db/schema.ts`. It also adds `dispute_reviews` (one row per reviewer), `collusion_flags`, and per-game publisher-policy fields, per the decisions above.
+
 ```
 users
   id (uuid pk), wallet_address (unique, checksummed), display_name,
@@ -193,10 +215,12 @@ Off-chain (DB) statuses are richer than on-chain ones. The contract only tracks 
 
 | On-chain status | DB statuses that map to it |
 |---|---|
-| `Open` | open |
-| `Active` | active, in_review, decided, disputed, void (until the refund tx confirms) |
+| `Open` | pending_deposit (until confirmed), open |
+| `Active` | active, in_review, decided, disputed |
 | `Settled` | settled |
-| `Refunded` | refunded |
+| `Drawn`, `Cancelled`, `Expired` | refunded |
+
+A void verdict is recorded on-chain as `resolveDraw` (both refunded), so `void` is an outcome, not a status.
 
 Edge cases from the brief:
 - **Never accepted:** the creator can cancel anytime while it's open. After `accept_by`, anyone (the cron or the creator) can call `refundUnaccepted`.
@@ -213,8 +237,15 @@ One small, **non-upgradeable** contract, `ChallengeEscrow.sol`. One stake token 
 
 Inherits from OpenZeppelin: `Ownable2Step`, `ReentrancyGuard`, `Pausable`, and `SafeERC20` (as a library).
 
+As built in M1 (see `contracts/src/ChallengeEscrow.sol`), with these refinements over the outline below:
+- The invited opponent is stored in the `opponent` field while the challenge is open, which saves a storage slot.
+- The resolve window (default 7 days) is set by the owner within 1–30 days and snapshotted at creation like the fee.
+- The resolver address can't create or accept challenges, and can't be invited.
+- `_pullStake` checks the balance delta and rejects fee-on-transfer tokens.
+- The deadlines are a strict partition: verdicts work up to and including `resolveBy`, refunds only after it.
+
 ```solidity
-enum Status { None, Open, Active, Settled, Refunded }
+enum Status { None, Open, Active, Settled, Drawn, Cancelled, Expired }
 
 struct Challenge {
     address creator;
@@ -266,8 +297,8 @@ Before mainnet, at minimum: 100% branch coverage in Foundry, fuzz and invariant 
 
 | # | Milestone | You can run or test |
 |---|---|---|
-| **M0** | Monorepo scaffold: `apps/web` (Next.js, Tailwind, Drizzle), `contracts/` (Foundry), CI running lint, typecheck, and tests | `npm run dev` shows a landing page. `forge test` passes. CI is green. |
-| **M1** | `ChallengeEscrow.sol` + mock USDC, with full unit, fuzz, and invariant tests | `forge test -vv` covers every lifecycle path, including timeouts and refunds. |
+| **M0** ✅ | Monorepo scaffold: `apps/web` (Next.js, Tailwind, Drizzle), `contracts/` (Foundry), CI running lint, typecheck, and tests | `npm run dev` shows a landing page. `forge test` passes. CI is green. |
+| **M1** ✅ | `ChallengeEscrow.sol` + mock USDC, with full unit, fuzz, and invariant tests | `forge test -vv` covers every lifecycle path, including timeouts and refunds. |
 | **M2** | Deploy to Base Sepolia and verify on Basescan. Add a script that runs a full match with `cast` | A real create → accept → resolve → withdraw on testnet, visible on Basescan. |
 | **M3** | Wallet connect + SIWE login + `users` table + admin flag | Connect a wallet, sign in, see your profile. Admin routes are blocked for non-admins. |
 | **M4** | Create, browse, and accept challenges: DB rows + on-chain deposits, receipt verification, reconciliation cron | Two browser profiles (two wallets) create and accept a challenge, and both deposits show on-chain. |
@@ -315,4 +346,5 @@ This is a checklist of topics to take to a lawyer who specializes in gaming and 
 
 ## 8. Next step
 
-Answer §1 (or say "defaults"), then I'll start **M0 + M1**: the scaffold and the escrow contract with tests.
+**M2:** deploy `ChallengeEscrow` and a public-mint test USDC to Base Sepolia, verify on Basescan, and run a full
+match with `cast`. This needs a funded Base Sepolia deployer wallet (free faucet ETH) and a Basescan API key.
