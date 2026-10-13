@@ -1,0 +1,20 @@
+{
+  "name": "skill-duel",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "dev": "npm run dev -w web",
+    "build": "npm run build -w web",
+    "lint": "npm run lint -w web",
+    "typecheck": "npm run typecheck -w web",
+    "test": "npm run test -w web",
+    "contracts:build": "cd contracts && forge build",
+    "contracts:test": "cd contracts && forge test",
+    "contracts:fmt": "cd contracts && forge fmt"
+  }
+}
